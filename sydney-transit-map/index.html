@@ -22,6 +22,19 @@
         .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
         .swatch { width: 14px; height: 3px; display: inline-block; border-radius: 2px; }
         #stat { margin-top: 8px; font-size: 11px; color: #94a3b8; max-width: 260px; line-height: 1.4; }
+        #board { top: 20px; right: 20px; width: 340px; max-width: calc(100vw - 40px); max-height: 70vh; overflow-y: auto; display: none; }
+        .board-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 8px; }
+        .board-head strong { font-size: 14px; color: #3ecf8e; }
+        #board-close { background: none; border: 0; color: #94a3b8; font-size: 20px; cursor: pointer; line-height: 1; }
+        #board-body { font-size: 12px; color: #94a3b8; }
+        .dep { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-top: 1px solid rgba(255,255,255,0.08); font-size: 13px; color: #fff; }
+        .badge { min-width: 34px; text-align: center; padding: 3px 6px; border-radius: 6px; font-weight: 700; font-size: 12px; color: #0b0e14; }
+        .dep-mid { flex: 1; min-width: 0; }
+        .dep-mid div:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .dep-right { text-align: right; font-weight: 600; }
+        .dep-sub { font-size: 11px; color: #94a3b8; font-weight: 400; }
+        .dep-sub.late { color: #f87171; }
+        .dep-sub.ok { color: #4ade80; }
         #tip {
             position: absolute; z-index: 1100; pointer-events: none; display: none;
             background: rgba(15, 23, 42, 0.95); border: 1px solid rgba(255,255,255,0.15);
@@ -40,7 +53,7 @@
 
 <div id="info" class="panel">
     <h2>Sydney Transit Map</h2>
-    <p>Real route lines and stops from Transport for NSW GTFS data. Hover a stop or line for its name. Zoom in to reveal bus stops.</p>
+    <p>Real route lines and stops from Transport for NSW GTFS data. Hover a stop or line for its name, click a stop for live departures. Zoom in to reveal bus stops.</p>
 </div>
 
 <div id="filters" class="panel">
@@ -49,6 +62,11 @@
     <label><input type="checkbox" data-type="2" checked><span class="dot" style="background:#1FA94B"></span>Ferries</label>
     <label><input type="checkbox" data-type="0" checked><span class="dot" style="background:#38BDF8"></span>Bus stops</label>
     <div id="stat">Loading…</div>
+</div>
+
+<div id="board" class="panel">
+    <div class="board-head"><strong id="board-title"></strong><button id="board-close" aria-label="Close">&times;</button></div>
+    <div id="board-body"></div>
 </div>
 
 <div id="tip"></div>
@@ -113,7 +131,7 @@
     }
 
     // ---- Stops: drawn on one canvas so tens of thousands stay fast ----
-    let stops = { names: [], type: null, mx: null, my: null, byType: [[], [], [], []] };
+    let stops = { names: [], ids: [], type: null, mx: null, my: null, byType: [[], [], [], []] };
     let visIdx = [], visX = [], visY = [];   // stops currently on screen (for hover)
 
     const StopsLayer = L.Layer.extend({
@@ -188,13 +206,15 @@
     function setStops(data) {
         const n = data.length;
         stops.names = new Array(n);
+        stops.ids = new Array(n);
         stops.type = new Uint8Array(n);
         stops.mx = new Float64Array(n);
         stops.my = new Float64Array(n);
         stops.byType = [[], [], [], []];
         for (let i = 0; i < n; i++) {
-            const [name, lon, lat, type] = data[i];
+            const [name, lon, lat, type, id] = data[i];
             stops.names[i] = name;
+            stops.ids[i] = id || '';
             stops.type[i] = type;
             // Web Mercator position as a fraction of the world (0 to 1), so drawing is just a multiply
             stops.mx[i] = (lon + 180) / 360;
@@ -223,6 +243,93 @@
         tip.style.top = (e.containerPoint.y + 14) + 'px';
     });
     map.on('mouseout movestart', () => { tip.style.display = 'none'; });
+
+    // ---- Live departures panel ----
+    const board = document.getElementById('board');
+    const boardTitle = document.getElementById('board-title');
+    const boardBody = document.getElementById('board-body');
+    let boardStop = -1, boardTimer = null;
+
+    function fmtTime(iso) {
+        return new Date(iso).toLocaleTimeString('en-AU', { hour: 'numeric', minute: '2-digit', timeZone: 'Australia/Sydney' });
+    }
+
+    function showBoardMessage(text) { boardBody.textContent = text; }
+
+    function renderBoard(events, color) {
+        boardBody.textContent = '';
+        const rows = events.filter(ev => ev.estimated || ev.planned);
+        if (!rows.length) { showBoardMessage('No upcoming departures found.'); return; }
+        rows.forEach(ev => {
+            const when = ev.estimated || ev.planned;
+            const row = document.createElement('div'); row.className = 'dep';
+
+            const badge = document.createElement('span');
+            badge.className = 'badge'; badge.style.background = color; badge.textContent = ev.line || '?';
+
+            const mid = document.createElement('div'); mid.className = 'dep-mid';
+            const dest = document.createElement('div'); dest.textContent = ev.destination || 'Unknown destination';
+            const sub = document.createElement('div'); sub.className = 'dep-sub';
+            sub.textContent = fmtTime(when) + (ev.platform ? ' · ' + ev.platform : '');
+            mid.append(dest, sub);
+
+            const right = document.createElement('div'); right.className = 'dep-right';
+            const mins = Math.round((Date.parse(when) - Date.now()) / 60000);
+            const eta = document.createElement('div'); eta.textContent = mins <= 0 ? 'Now' : mins + ' min';
+            const st = document.createElement('div'); st.className = 'dep-sub';
+            if (ev.delayMin === null) st.textContent = 'Scheduled';
+            else if (ev.delayMin > 0) { st.textContent = ev.delayMin + ' min late'; st.classList.add('late'); }
+            else if (ev.delayMin < 0) { st.textContent = Math.abs(ev.delayMin) + ' min early'; st.classList.add('ok'); }
+            else { st.textContent = 'On time'; st.classList.add('ok'); }
+            right.append(eta, st);
+
+            row.append(badge, mid, right);
+            boardBody.append(row);
+        });
+    }
+
+    async function loadBoard(i) {
+        const id = stops.ids[i];
+        if (!id) { showBoardMessage('This stop has no ID. Re-run build-stops.js to rebuild stops.json.'); return; }
+        try {
+            const r = await fetch('/api/departures?stop=' + encodeURIComponent(id));
+            if (r.status === 404) throw new Error('/api/departures was not found. Open this page through the Next.js server (npm run dev), not npx serve.');
+            if (!r.ok) throw new Error('server returned ' + r.status);
+            const d = await r.json();
+            if (boardStop !== i) return;   // another stop was clicked in the meantime
+            renderBoard(d.events || [], STOP_COLORS[stops.type[i]]);
+        } catch (err) {
+            if (boardStop === i) showBoardMessage('Could not load departures: ' + err.message);
+        }
+    }
+
+    function openBoard(i) {
+        boardStop = i;
+        boardTitle.textContent = stops.names[i];
+        showBoardMessage('Loading departures…');
+        board.style.display = 'block';
+        clearInterval(boardTimer);
+        loadBoard(i);
+        boardTimer = setInterval(() => loadBoard(i), 30000);   // refresh every 30 seconds
+    }
+
+    function closeBoard() {
+        boardStop = -1;
+        clearInterval(boardTimer);
+        board.style.display = 'none';
+    }
+
+    document.getElementById('board-close').addEventListener('click', closeBoard);
+
+    map.on('click', e => {
+        let best = -1, bestD = 144;   // within 12px
+        for (let k = 0; k < visIdx.length; k++) {
+            const dx = visX[k] - e.containerPoint.x, dy = visY[k] - e.containerPoint.y;
+            const d = dx * dx + dy * dy;
+            if (d < bestD) { bestD = d; best = visIdx[k]; }
+        }
+        if (best >= 0) openBoard(best);
+    });
 
     // ---- Filters ----
     document.querySelectorAll('#filters input[type=checkbox]').forEach(box => {

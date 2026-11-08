@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sydney Transit Map</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
+    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+    <style>
+        html, body { margin: 0; height: 100%; background: #0b0e14; color: #fff; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+        #map { position: absolute; inset: 0; background: #090d16; }
+        .panel {
+            position: absolute; z-index: 1000; background: rgba(15, 23, 42, 0.95);
+            border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; padding: 14px 16px;
+            box-shadow: 0 10px 15px -3px rgba(0,0,0,0.5);
+        }
+        #info { top: 20px; left: 20px; max-width: 300px; pointer-events: none; }
+        #info h2 { margin: 0 0 6px 0; font-size: 16px; color: #3ecf8e; font-weight: 600; }
+        #info p { margin: 0; font-size: 12px; color: #94a3b8; line-height: 1.5; }
+        #filters { bottom: 30px; left: 20px; font-size: 12px; }
+        #filters label { display: flex; align-items: center; gap: 6px; margin: 5px 0; cursor: pointer; }
+        .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+        .swatch { width: 14px; height: 3px; display: inline-block; border-radius: 2px; }
+        #stat { margin-top: 8px; font-size: 11px; color: #94a3b8; max-width: 260px; line-height: 1.4; }
+        #board { top: 20px; right: 20px; width: 340px; max-width: calc(100vw - 40px); max-height: 70vh; overflow-y: auto; display: none; }
+        .board-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 8px; }
+        .board-head strong { font-size: 14px; color: #3ecf8e; }
+        #board-close { background: none; border: 0; color: #94a3b8; font-size: 20px; cursor: pointer; line-height: 1; }
+        #board-body { font-size: 12px; color: #94a3b8; }
+        .dep { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-top: 1px solid rgba(255,255,255,0.08); font-size: 13px; color: #fff; }
+        .badge { min-width: 34px; text-align: center; padding: 3px 6px; border-radius: 6px; font-weight: 700; font-size: 12px; color: #0b0e14; }
+        .dep-mid { flex: 1; min-width: 0; }
+        .dep-mid div:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .dep-right { text-align: right; font-weight: 600; }
+        .dep-sub { font-size: 11px; color: #94a3b8; font-weight: 400; }
+        .dep-sub.late { color: #f87171; }
+        .dep-sub.ok { color: #4ade80; }
+        #tip {
+            position: absolute; z-index: 1100; pointer-events: none; display: none;
+            background: rgba(15, 23, 42, 0.95); border: 1px solid rgba(255,255,255,0.15);
+            padding: 5px 9px; border-radius: 6px; font-size: 12px; white-space: nowrap;
+        }
+        #tip small { color: #94a3b8; margin-left: 6px; }
+        .leaflet-tooltip { background: rgba(15, 23, 42, 0.95); color: #fff; border: 1px solid rgba(255,255,255,0.15); }
+        .leaflet-tooltip-top:before, .leaflet-tooltip-bottom:before, .leaflet-tooltip-left:before, .leaflet-tooltip-right:before { display: none; }
+        .leaflet-container .leaflet-control-attribution { background: rgba(15, 23, 42, 0.8); color: #94a3b8; }
+        .leaflet-control-attribution a { color: #94a3b8; }
+    </style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div id="info" class="panel">
+    <h2>Sydney Transit Map</h2>
+    <p>Real route lines and stops from Transport for NSW GTFS data. Hover a stop or line for its name, click a stop for live departures. Zoom in to reveal bus stops.</p>
+</div>
+
+<div id="filters" class="panel">
+    <label><input type="checkbox" data-type="1" checked><span class="dot" style="background:#F68B1F"></span>Trains <span class="swatch" style="background:#F68B1F"></span> &amp; Metro <span class="swatch" style="background:#00A3A6"></span></label>
+    <label><input type="checkbox" data-type="3" checked><span class="dot" style="background:#E61E2A"></span>Light rail</label>
+    <label><input type="checkbox" data-type="2" checked><span class="dot" style="background:#1FA94B"></span>Ferries</label>
+    <label><input type="checkbox" data-type="0" checked><span class="dot" style="background:#38BDF8"></span>Bus stops</label>
+    <div id="stat">Loading…</div>
+</div>
+
+<div id="board" class="panel">
+    <div class="board-head"><strong id="board-title"></strong><button id="board-close" aria-label="Close">&times;</button></div>
+    <div id="board-body"></div>
+</div>
+
+<div id="tip"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.0.22/leaflet-maplibre-gl.js"></script>
+<script>
+    // ---- Settings ----
+    const COLORS = { train: '#F68B1F', metro: '#00A3A6', lightrail: '#E61E2A', ferry: '#1FA94B', bus: '#38BDF8' };
+    // Stop types: 0 = bus, 1 = train/metro station, 2 = ferry wharf, 3 = light rail
+    const STOP_COLORS = { 0: COLORS.bus, 1: COLORS.train, 2: COLORS.ferry, 3: COLORS.lightrail };
+    const STOP_LABELS = { 0: 'Bus stop', 1: 'Station', 2: 'Ferry wharf', 3: 'Light rail stop' };
+    const MODE_TO_GROUP = { train: 1, metro: 1, lightrail: 3, ferry: 2 };
+    const BUS_MIN_ZOOM = 14;      // bus stops appear from this zoom level
+    const LABEL_ZOOM = 12;        // station names appear from this zoom level
+    const BUS_LABEL_ZOOM = 16;    // bus stop names appear from this zoom level
+    const show = { 0: true, 1: true, 2: true, 3: true };
+
+    // ---- Map and background tiles ----
+    const map = L.map('map', {
+        zoomControl: false, preferCanvas: true, zoomAnimation: false, markerZoomAnimation: false,
+        minZoom: 8, maxZoom: 18
+    }).setView([-33.85, 151.05], 10);
+
+    L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+    // Background map: OpenFreeMap dark style (free, no API key). Needs the MapLibre scripts above.
+    // If those scripts are blocked, fall back to Esri's dark gray raster tiles.
+    if (L.maplibreGL) {
+        L.maplibreGL({
+            style: 'https://tiles.openfreemap.org/styles/dark',
+            attribution: '&copy; <a href="https://openfreemap.org">OpenFreeMap</a> <a href="https://www.openmaptiles.org/">&copy; OpenMapTiles</a> Data from <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+        }).addTo(map);
+    } else {
+        L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
+            maxNativeZoom: 16, maxZoom: 18,
+            attribution: 'Tiles &copy; Esri'
+        }).addTo(map);
+    }
+
+    map.createPane('stopsPane').style.zIndex = 450;   // above the route lines
+
+    // ---- Route lines (one layer group per filter checkbox) ----
+    const lineGroups = { 1: L.layerGroup().addTo(map), 2: L.layerGroup().addTo(map), 3: L.layerGroup().addTo(map) };
+    const MODE_NAMES = { train: 'Train', metro: 'Metro', lightrail: 'Light rail', ferry: 'Ferry' };
+
+    function addRoutes(data) {
+        data.forEach(([name, mode, lines]) => {
+            const style = {
+                color: COLORS[mode], weight: mode === 'metro' ? 4 : 3, opacity: 0.85,
+                dashArray: mode === 'ferry' ? '6 6' : null, lineJoin: 'round'
+            };
+            lines.forEach(flat => {
+                const pts = [];
+                for (let i = 0; i < flat.length; i += 2) pts.push([flat[i + 1], flat[i]]);
+                L.polyline(pts, style)
+                    .bindTooltip(MODE_NAMES[mode] + ' ' + name, { sticky: true })
+                    .addTo(lineGroups[MODE_TO_GROUP[mode]]);
+            });
+        });
+    }
+
+    // ---- Stops: drawn on one canvas so tens of thousands stay fast ----
+    let stops = { names: [], ids: [], type: null, mx: null, my: null, byType: [[], [], [], []] };
+    let visIdx = [], visX = [], visY = [];   // stops currently on screen (for hover)
+
+    const StopsLayer = L.Layer.extend({
+        onAdd(m) {
+            this._canvas = L.DomUtil.create('canvas');
+            this._canvas.style.pointerEvents = 'none';
+            m.getPane('stopsPane').appendChild(this._canvas);
+            m.on('move zoom resize viewreset', this.redraw, this);
+            this.redraw();
+        },
+        onRemove(m) {
+            L.DomUtil.remove(this._canvas);
+            m.off('move zoom resize viewreset', this.redraw, this);
+        },
+        redraw() {
+            const m = this._map, c = this._canvas;
+            if (!m) return;
+            const size = m.getSize(), dpr = window.devicePixelRatio || 1;
+            if (c.width !== Math.round(size.x * dpr) || c.height !== Math.round(size.y * dpr)) {
+                c.width = Math.round(size.x * dpr); c.height = Math.round(size.y * dpr);
+                c.style.width = size.x + 'px'; c.style.height = size.y + 'px';
+            }
+            L.DomUtil.setPosition(c, m.containerPointToLayerPoint([0, 0]));
+            const ctx = c.getContext('2d');
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            ctx.clearRect(0, 0, size.x, size.y);
+            visIdx.length = 0; visX.length = 0; visY.length = 0;
+            if (!stops.type) return;
+
+            const z = m.getZoom();
+            const scale = 256 * Math.pow(2, z);
+            const tl = m.getPixelBounds().min;
+            const labels = [];
+
+            for (const t of [0, 3, 2, 1]) {   // draw stations last so they sit on top
+                if (!show[t]) continue;
+                if (t === 0 && z < BUS_MIN_ZOOM) continue;
+                const r = t === 0 ? (z >= 16 ? 3.5 : 2.5) : (z <= 10 ? 2.8 : z <= 12 ? 3.8 : 5);
+                ctx.fillStyle = STOP_COLORS[t];
+                ctx.strokeStyle = 'rgba(9,13,22,0.9)';
+                ctx.lineWidth = 1;
+                const list = stops.byType[t];
+                ctx.beginPath();
+                for (let k = 0; k < list.length; k++) {
+                    const i = list[k];
+                    const x = stops.mx[i] * scale - tl.x, y = stops.my[i] * scale - tl.y;
+                    if (x < -10 || x > size.x + 10 || y < -10 || y > size.y + 10) continue;
+                    visIdx.push(i); visX.push(x); visY.push(y);
+                    ctx.moveTo(x + r, y);
+                    ctx.arc(x, y, r, 0, 2 * Math.PI);
+                    if ((t === 0 && z >= BUS_LABEL_ZOOM) || (t !== 0 && z >= LABEL_ZOOM)) labels.push(i, x, y);
+                }
+                ctx.fill();
+                if (t !== 0) ctx.stroke();
+            }
+
+            if (labels.length) {
+                ctx.font = '11px system-ui, sans-serif';
+                ctx.lineWidth = 3;
+                ctx.strokeStyle = 'rgba(9,13,22,0.9)';
+                ctx.fillStyle = '#e2e8f0';
+                for (let k = 0; k < labels.length; k += 3) {
+                    const name = stops.names[labels[k]];
+                    ctx.strokeText(name, labels[k + 1] + 8, labels[k + 2] + 4);
+                    ctx.fillText(name, labels[k + 1] + 8, labels[k + 2] + 4);
+                }
+            }
+        }
+    });
+    const stopsLayer = new StopsLayer().addTo(map);
+
+    function setStops(data) {
+        const n = data.length;
+        stops.names = new Array(n);
+        stops.ids = new Array(n);
+        stops.type = new Uint8Array(n);
+        stops.mx = new Float64Array(n);
+        stops.my = new Float64Array(n);
+        stops.byType = [[], [], [], []];
+        for (let i = 0; i < n; i++) {
+            const [name, lon, lat, type, id] = data[i];
+            stops.names[i] = name;
+            stops.ids[i] = id || '';
+            stops.type[i] = type;
+            // Web Mercator position as a fraction of the world (0 to 1), so drawing is just a multiply
+            stops.mx[i] = (lon + 180) / 360;
+            stops.my[i] = 0.5 - Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360)) / (2 * Math.PI);
+            stops.byType[type].push(i);
+        }
+        stopsLayer.redraw();
+    }
+
+    // ---- Hover tooltip for stops ----
+    const tip = document.getElementById('tip');
+    map.on('mousemove', e => {
+        let best = -1, bestD = 100;   // within 10px
+        for (let k = 0; k < visIdx.length; k++) {
+            const dx = visX[k] - e.containerPoint.x, dy = visY[k] - e.containerPoint.y;
+            const d = dx * dx + dy * dy;
+            if (d < bestD) { bestD = d; best = visIdx[k]; }
+        }
+        if (best < 0) { tip.style.display = 'none'; return; }
+        tip.textContent = stops.names[best];
+        const small = document.createElement('small');
+        small.textContent = STOP_LABELS[stops.type[best]];
+        tip.appendChild(small);
+        tip.style.display = 'block';
+        tip.style.left = (e.containerPoint.x + 14) + 'px';
+        tip.style.top = (e.containerPoint.y + 14) + 'px';
+    });
+    map.on('mouseout movestart', () => { tip.style.display = 'none'; });
+
+    // ---- Live departures panel ----
+    const board = document.getElementById('board');
+    const boardTitle = document.getElementById('board-title');
+    const boardBody = document.getElementById('board-body');
+    let boardStop = -1, boardTimer = null;
+
+    function fmtTime(iso) {
+        return new Date(iso).toLocaleTimeString('en-AU', { hour: 'numeric', minute: '2-digit', timeZone: 'Australia/Sydney' });
+    }
+
+    function showBoardMessage(text) { boardBody.textContent = text; }
+
+    function renderBoard(events, color) {
+        boardBody.textContent = '';
+        const rows = events.filter(ev => ev.estimated || ev.planned);
+        if (!rows.length) { showBoardMessage('No upcoming departures found.'); return; }
+        rows.forEach(ev => {
+            const when = ev.estimated || ev.planned;
+            const row = document.createElement('div'); row.className = 'dep';
+
+            const badge = document.createElement('span');
+            badge.className = 'badge'; badge.style.background = color; badge.textContent = ev.line || '?';
+
+            const mid = document.createElement('div'); mid.className = 'dep-mid';
+            const dest = document.createElement('div'); dest.textContent = ev.destination || 'Unknown destination';
+            const sub = document.createElement('div'); sub.className = 'dep-sub';
+            sub.textContent = fmtTime(when) + (ev.platform ? ' · ' + ev.platform : '');
+            mid.append(dest, sub);
+
+            const right = document.createElement('div'); right.className = 'dep-right';
+            const mins = Math.round((Date.parse(when) - Date.now()) / 60000);
+            const eta = document.createElement('div'); eta.textContent = mins <= 0 ? 'Now' : mins + ' min';
+            const st = document.createElement('div'); st.className = 'dep-sub';
+            if (ev.delayMin === null) st.textContent = 'Scheduled';
+            else if (ev.delayMin > 0) { st.textContent = ev.delayMin + ' min late'; st.classList.add('late'); }
+            else if (ev.delayMin < 0) { st.textContent = Math.abs(ev.delayMin) + ' min early'; st.classList.add('ok'); }
+            else { st.textContent = 'On time'; st.classList.add('ok'); }
+            right.append(eta, st);
+
+            row.append(badge, mid, right);
+            boardBody.append(row);
+        });
+    }
+
+    async function loadBoard(i) {
+        const id = stops.ids[i];
+        if (!id) { showBoardMessage('This stop has no ID. Re-run build-stops.js to rebuild stops.json.'); return; }
+        try {
+            const r = await fetch('/api/departures?stop=' + encodeURIComponent(id));
+            if (r.status === 404) throw new Error('/api/departures was not found. Open this page through the Next.js server (npm run dev), not npx serve.');
+            if (!r.ok) throw new Error('server returned ' + r.status);
+            const d = await r.json();
+            if (boardStop !== i) return;   // another stop was clicked in the meantime
+            renderBoard(d.events || [], STOP_COLORS[stops.type[i]]);
+        } catch (err) {
+            if (boardStop === i) showBoardMessage('Could not load departures: ' + err.message);
+        }
+    }
+
+    function openBoard(i) {
+        boardStop = i;
+        boardTitle.textContent = stops.names[i];
+        showBoardMessage('Loading departures…');
+        board.style.display = 'block';
+        clearInterval(boardTimer);
+        loadBoard(i);
+        boardTimer = setInterval(() => loadBoard(i), 30000);   // refresh every 30 seconds
+    }
+
+    function closeBoard() {
+        boardStop = -1;
+        clearInterval(boardTimer);
+        board.style.display = 'none';
+    }
+
+    document.getElementById('board-close').addEventListener('click', closeBoard);
+
+    map.on('click', e => {
+        let best = -1, bestD = 144;   // within 12px
+        for (let k = 0; k < visIdx.length; k++) {
+            const dx = visX[k] - e.containerPoint.x, dy = visY[k] - e.containerPoint.y;
+            const d = dx * dx + dy * dy;
+            if (d < bestD) { bestD = d; best = visIdx[k]; }
+        }
+        if (best >= 0) openBoard(best);
+    });
+
+    // ---- Filters ----
+    document.querySelectorAll('#filters input[type=checkbox]').forEach(box => {
+        box.addEventListener('change', () => {
+            const t = +box.dataset.type;
+            show[t] = box.checked;
+            if (lineGroups[t]) { box.checked ? map.addLayer(lineGroups[t]) : map.removeLayer(lineGroups[t]); }
+            stopsLayer.redraw();
+        });
+    });
+
+    // ---- Load data ----
+    const stat = document.getElementById('stat');
+    const messages = [];
+    function loadJson(file) {
+        return fetch(file).then(r => { if (!r.ok) throw new Error(file + ' (HTTP ' + r.status + ')'); return r.json(); });
+    }
+
+    Promise.all([
+        loadJson('stops.json').then(d => { setStops(d); messages.push(d.length.toLocaleString() + ' stops'); })
+            .catch(err => messages.push('Could not load ' + err.message)),
+        loadJson('routes.json').then(d => { addRoutes(d); messages.push(d.length + ' lines'); })
+            .catch(err => messages.push('Could not load ' + err.message + ' (run build-routes.js)'))
+    ]).then(() => { stat.textContent = messages.join(' · '); });
+</script>
+</body>
+</html>

@@ -1,5 +1,5 @@
 // Usage: node build-stops.js [path/to/stops.txt] [output.json]
-// Converts a GTFS stops.txt into a compact stops.json: [[name, lon, lat, type], ...]
+// Converts a GTFS stops.txt into a compact stops.json: [[name, lon, lat, type, stop_id], ...]
 // type: 0 = bus, 1 = train/metro station, 2 = ferry wharf, 3 = light rail
 const fs = require('fs');
 
@@ -41,6 +41,7 @@ const header = parseLine(lines[0]);
 const col = n => header.indexOf(n);
 const iName = col('stop_name'), iLat = col('stop_lat'), iLon = col('stop_lon');
 const iType = col('location_type'), iParent = col('parent_station');
+const iId = col('stop_id');
 
 if (iName < 0 || iLat < 0 || iLon < 0) {
     console.error('stops.txt is missing stop_name, stop_lat or stop_lon columns.');
@@ -70,7 +71,7 @@ for (let n = 1; n < lines.length; n++) {
 
     const type = classify(name);
     counts[type]++;
-    result.push([name, +lon.toFixed(5), +lat.toFixed(5), type]);
+    result.push([name, +lon.toFixed(5), +lat.toFixed(5), type, iId >= 0 ? f[iId] : '']);
 }
 
 fs.writeFileSync(output, JSON.stringify(result));
