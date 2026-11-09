@@ -53,7 +53,7 @@
 
 <div id="info" class="panel">
     <h2>Sydney Transit Map</h2>
-    <p>Real route lines and stops from Transport for NSW GTFS data. Hover a stop or line for its name, click a stop for live departures. Zoom in to reveal bus stops.</p>
+    <p>Real route lines and stops from Transport for NSW GTFS data. Hover a stop or line for its name, click a stop for live departures. Vehicles update every 15 seconds. Zoom in to reveal bus stops.</p>
 </div>
 
 <div id="filters" class="panel">
@@ -61,7 +61,9 @@
     <label><input type="checkbox" data-type="3" checked><span class="dot" style="background:#E61E2A"></span>Light rail</label>
     <label><input type="checkbox" data-type="2" checked><span class="dot" style="background:#1FA94B"></span>Ferries</label>
     <label><input type="checkbox" data-type="0" checked><span class="dot" style="background:#38BDF8"></span>Bus stops</label>
+    <label><input type="checkbox" id="vehicles-toggle" checked><span class="dot" style="background:#fff"></span>Live vehicles</label>
     <div id="stat">Loading…</div>
+    <div id="vstat" style="margin-top:4px;font-size:11px;color:#94a3b8;max-width:260px;"></div>
 </div>
 
 <div id="board" class="panel">
@@ -332,8 +334,75 @@
         if (best >= 0) openBoard(best);
     });
 
+    // ---- Live vehicles ----
+    map.createPane('vehiclesPane').style.zIndex = 460;   // above the stops
+    const vehicleMarkers = new Map();
+    const vstat = document.getElementById('vstat');
+    const vehiclesToggle = document.getElementById('vehicles-toggle');
+    let vehicleTimer = null;
+
+    function vehicleTip(v) {
+        const el = document.createElement('div');
+        const age = v.timestamp ? Math.max(0, Math.round(Date.now() / 1000 - v.timestamp)) : null;
+        const parts = [MODE_NAMES[v.mode] + (v.label ? ' ' + v.label : '')];
+        if (v.routeId) parts.push('Route ' + v.routeId);
+        if (v.speedKmh != null) parts.push(v.speedKmh + ' km/h');
+        if (age !== null) parts.push('updated ' + (age < 90 ? age + 's' : Math.round(age / 60) + ' min') + ' ago');
+        el.textContent = parts.join(' · ');
+        return el;
+    }
+
+    async function loadVehicles() {
+        try {
+            const r = await fetch('/api/vehicles');
+            if (r.status === 404) throw new Error('/api/vehicles was not found (open the page through the Next.js server)');
+            if (!r.ok) throw new Error('server returned ' + r.status);
+            const d = await r.json();
+            if (!vehiclesToggle.checked) return;
+            const seen = new Set();
+            (d.vehicles || []).forEach(v => {
+                seen.add(v.id);
+                let m = vehicleMarkers.get(v.id);
+                if (!m) {
+                    m = L.circleMarker([v.lat, v.lon], {
+                        pane: 'vehiclesPane', radius: 6, color: '#ffffff', weight: 2,
+                        fillColor: COLORS[v.mode], fillOpacity: 1
+                    }).bindTooltip('', { sticky: true }).addTo(map);
+                    vehicleMarkers.set(v.id, m);
+                } else {
+                    m.setLatLng([v.lat, v.lon]);
+                }
+                m.setTooltipContent(vehicleTip(v));
+            });
+            vehicleMarkers.forEach((m, id) => {
+                if (!seen.has(id)) { map.removeLayer(m); vehicleMarkers.delete(id); }
+            });
+            vstat.textContent = vehicleMarkers.size + ' vehicles live' +
+                (d.failed ? ' (' + d.failed + ' feed' + (d.failed > 1 ? 's' : '') + ' unavailable)' : '');
+        } catch (err) {
+            vstat.textContent = 'Vehicles unavailable: ' + err.message;
+        }
+    }
+
+    function startVehicles() {
+        stopVehicles();
+        loadVehicles();
+        vehicleTimer = setInterval(() => { if (!document.hidden) loadVehicles(); }, 15000);
+    }
+
+    function stopVehicles() {
+        clearInterval(vehicleTimer);
+        vehicleTimer = null;
+        vehicleMarkers.forEach(m => map.removeLayer(m));
+        vehicleMarkers.clear();
+        vstat.textContent = '';
+    }
+
+    vehiclesToggle.addEventListener('change', () => vehiclesToggle.checked ? startVehicles() : stopVehicles());
+    startVehicles();
+
     // ---- Filters ----
-    document.querySelectorAll('#filters input[type=checkbox]').forEach(box => {
+    document.querySelectorAll('#filters input[data-type]').forEach(box => {
         box.addEventListener('change', () => {
             const t = +box.dataset.type;
             show[t] = box.checked;
