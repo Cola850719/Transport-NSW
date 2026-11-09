@@ -39,8 +39,7 @@ export async function GET(req: Request) {
   const data = await res.json();
   if (searchParams.get("raw")) return Response.json(data);
 
-  // The response shape below is written from memory of the Trip Planner API.
-  // If events come back empty or oddly named, check ?raw=1 and adjust these field names.
+  // Field names below were checked against a real response (?raw=1 shows the original).
   const events = (data.stopEvents ?? []).slice(0, 12).map((e: any) => {
     const planned: string | null = e.departureTimePlanned ?? null;
     const estimated: string | null = e.departureTimeEstimated ?? null;
@@ -49,7 +48,8 @@ export async function GET(req: Request) {
     return {
       line: e.transportation?.disassembledName ?? e.transportation?.number ?? "",
       destination: e.transportation?.destination?.name ?? "",
-      platform: e.location?.disassembledName ?? "",
+      platform: e.location?.properties?.platformName ?? "",
+      cancelled: e.isCancelled === true,
       planned,
       estimated,
       delayMin,

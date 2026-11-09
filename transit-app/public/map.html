@@ -275,9 +275,10 @@
 
             const right = document.createElement('div'); right.className = 'dep-right';
             const mins = Math.round((Date.parse(when) - Date.now()) / 60000);
-            const eta = document.createElement('div'); eta.textContent = mins <= 0 ? 'Now' : mins + ' min';
+            const eta = document.createElement('div'); eta.textContent = ev.cancelled ? '—' : (mins <= 0 ? 'Now' : mins + ' min');
             const st = document.createElement('div'); st.className = 'dep-sub';
-            if (ev.delayMin === null) st.textContent = 'Scheduled';
+            if (ev.cancelled) { st.textContent = 'Cancelled'; st.classList.add('late'); }
+            else if (ev.delayMin === null) st.textContent = 'Scheduled';
             else if (ev.delayMin > 0) { st.textContent = ev.delayMin + ' min late'; st.classList.add('late'); }
             else if (ev.delayMin < 0) { st.textContent = Math.abs(ev.delayMin) + ' min early'; st.classList.add('ok'); }
             else { st.textContent = 'On time'; st.classList.add('ok'); }
