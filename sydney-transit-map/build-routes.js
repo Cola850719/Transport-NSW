@@ -1,5 +1,6 @@
 // Usage: node build-routes.js [folder with routes.txt, trips.txt, shapes.txt] [output.json]
 // Builds routes.json: [[name, mode, [[lon,lat,lon,lat,...], ...]], ...]
+// and route-names.json: { route_id: line name } (written next to routes.json)
 // mode: train | metro | lightrail | ferry   (buses are skipped: too many routes)
 const fs = require('fs');
 const path = require('path');
@@ -165,6 +166,13 @@ function inside(lon, lat) {
     });
 
     fs.writeFileSync(output, JSON.stringify(result));
+
+    // route_id -> line name, so live vehicles can show "T1" instead of an internal ID
+    const names = {};
+    routes.forEach((r, id) => { names[id] = r.name; });
+    const namesFile = path.join(path.dirname(path.resolve(output)), 'route-names.json');
+    fs.writeFileSync(namesFile, JSON.stringify(names));
+    console.log(`Wrote ${routes.size} route names to ${namesFile}`);
     console.log(`Wrote ${result.length} lines to ${output}`, modeCounts);
 })().catch(err => {
     console.error('Failed:', err.message);
